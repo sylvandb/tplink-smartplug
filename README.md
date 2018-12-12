@@ -44,6 +44,20 @@ Provide the target IP using `-t` and a command to send using either `-c` or `-j`
 
 More advanced commands such as creating or editing rules can be issued using the `-j` flag by providing the full JSON string for the command. Please consult [tplink-smarthome-commands.txt](tplink-smarthome-commands.txt) for a comprehensive list of commands.
 
+## Docker ##
+
+##### Build ####
+
+   `docker build -t tplink-smartplug .`
+
+#### Usage ####
+
+   `docker run -it --rm tplink-smartplug -t <ip> [-c <cmd> || -j <json>]`
+
+#### usage tddp-client over udp ####
+
+   `docker run -it -p 61000:61000/udp --rm --entrypoint python tplink-smartplug ./tddp-client/tddp-client.py -t <ip> -u username -p password -c 0A`
+
 ## Wireshark Dissector ##
 
 Wireshark dissector to decrypt TP-Link Smart Home Protocol packets (TCP port 9999).
