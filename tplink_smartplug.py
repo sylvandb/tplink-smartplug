@@ -29,14 +29,14 @@ VERSION = 0.9
 # Predefined Smart Plug Commands
 # For a full list of commands, consult tplink_commands.txt
 COMMANDS = {
-	'info'     : '{"system":{"get_sysinfo":{}}}',
-	'on'       : '{"system":{"set_relay_state":{"state":1}}}',
-	'off'      : '{"system":{"set_relay_state":{"state":0}}}',
+	'info'	   : '{"system":{"get_sysinfo":{}}}',
+	'on'	   : '{"system":{"set_relay_state":{"state":1}}}',
+	'off'	   : '{"system":{"set_relay_state":{"state":0}}}',
 	'ledoff'   : '{"system":{"set_led_off":{"off":1}}}',
 	'ledon'    : '{"system":{"set_led_off":{"off":0}}}',
 	'cloudinfo': '{"cnCloud":{"get_info":{}}}',
 	'wlanscan' : '{"netif":{"get_scaninfo":{"refresh":0}}}',
-	'time'     : '{"time":{"get_time":{}}}',
+	'time'	   : '{"time":{"get_time":{}}}',
 	'schedule' : '{"schedule":{"get_rules":{}}}',
 	'countdown': '{"count_down":{"get_rules":{}}}',
 	'antitheft': '{"anti_theft":{"get_rules":{}}}',
@@ -113,6 +113,15 @@ if __name__ == '__main__':
 			parser.error("Invalid hostname.")
 		return hostname
 
+	def validPort(port):
+		try:
+			port = int(port)
+			if port < 1 or port > 65535:
+				raise ValueError
+		except ValueError:
+			parser.error("Invalid port number.")
+		return port
+
 
 	# Parse commandline arguments
 	description="TP-Link Wi-Fi Smart Plug Client v%s" % (VERSION,)
@@ -125,6 +134,8 @@ if __name__ == '__main__':
 
 	parser.add_argument("-t", "--target", metavar="<hostname>", required=True, type=validHostname,
 		help="Target hostname or IP address")
+	parser.add_argument("-p", "--port", metavar="<port>", default=9999, required=False,
+		help="Target port", type=validPort)
 	parser.add_argument("-a", "--argument", metavar="<value>",
 		help="Some commands (bright) require an argument")
 
@@ -147,7 +158,7 @@ if __name__ == '__main__':
 	reply = ''
 
 	try:
-		reply = comm(args.target, cmd)
+		reply = comm(args.target, cmd, port=args.port)
 		ec = len(reply) <= 0
 	except CommFailure as e:
 		print("<<%s>>" % (str(e),), file=stderr)
