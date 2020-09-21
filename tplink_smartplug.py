@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 #
 # TP-Link Wi-Fi Smart Plug Protocol Client
 # For use with TP-Link HS-100 or HS-110
@@ -23,7 +23,7 @@ from __future__ import print_function
 import socket
 from struct import pack, unpack
 
-VERSION = 0.9
+VERSION = 0.10
 
 
 # Predefined Smart Plug Commands
