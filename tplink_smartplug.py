@@ -78,13 +78,16 @@ class CommFailure(Exception):
 	pass
 
 # Send command and receive reply
-def comm(ip, cmd, port=9999):
+def comm(ip, cmd, port=9999, to=None):
 	dec = isinstance(cmd, str)
 	if dec:
 		cmd = cmd.encode()
 	try:
 		sock_tcp = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+		if to:
+			sock_tcp.settimeout(to)
 		sock_tcp.connect((ip, port))
+		sock_tcp.settimeout(None)
 		sock_tcp.send(pack('>I', len(cmd)) + encrypt(cmd))
 		data = sock_tcp.recv(2048)
 		dlen = 4 + unpack('>I', data[:4])[0]
@@ -113,14 +116,14 @@ if __name__ == '__main__':
 			parser.error("Invalid hostname.")
 		return hostname
 
-	def validPort(port):
+	def validNum(num, minnum, maxnum, numname):
 		try:
-			port = int(port)
-			if port < 1 or port > 65535:
+			num = int(num)
+			if num < minnum or num > maxnum:
 				raise ValueError
 		except ValueError:
-			parser.error("Invalid port number.")
-		return port
+			parser.error("Invalid %s number." % (numname,))
+		return num
 
 
 	# Parse commandline arguments
@@ -134,8 +137,10 @@ if __name__ == '__main__':
 
 	parser.add_argument("-t", "--target", metavar="<hostname>", required=True, type=validHostname,
 		help="Target hostname or IP address")
-	parser.add_argument("-p", "--port", metavar="<port>", default=9999, required=False,
-		help="Target port", type=validPort)
+	parser.add_argument("-p", "--port", metavar="<port>", default=9999, type=lambda x: validNum(x, 1, 65535, 'port'),
+		help="Target port")
+	parser.add_argument("--timeout", default=10, type=lambda x: validNum(x, 0, 65535, 'timeout'),
+		help="Timeout to establish connection, 0 for infinite")
 	parser.add_argument("-a", "--argument", metavar="<value>",
 		help="Some commands (bright) require an argument")
 
@@ -158,7 +163,7 @@ if __name__ == '__main__':
 	reply = ''
 
 	try:
-		reply = comm(args.target, cmd, port=args.port)
+		reply = comm(args.target, cmd, port=args.port, to=args.timeout)
 		ec = len(reply) <= 0
 	except CommFailure as e:
 		print("<<%s>>" % (str(e),), file=stderr)
