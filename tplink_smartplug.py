@@ -23,7 +23,7 @@ from __future__ import print_function
 import socket
 from struct import pack, unpack
 
-VERSION = 0.10
+VERSION = 0.11
 
 
 # Predefined Smart Plug Commands
@@ -49,24 +49,26 @@ COMMANDS = {
 
 
 # Encryption and Decryption of TP-Link Smart Home Protocol
-# XOR Autokey Cipher with starting key = 171
+# XOR Autokey Cipher with starting key
+_STARTING_KEY = 171
+
 def encrypt(string):
-	key = 171
-	result = []
 	chars = isinstance(string[0], str)
 	if chars:
 		string = map(ord, string)
+	key = _STARTING_KEY
+	result = []
 	for plain in string:
 		key ^= plain
 		result.append(key)
 	return b''.join(map(chr, result)) if chars else bytes(result)
 
 def decrypt(string):
-	key = 171
-	result = []
 	chars = isinstance(string[0], str)
 	if chars:
 		string = map(ord, string)
+	key = _STARTING_KEY
+	result = []
 	for cipher in string:
 		result.append(key ^ cipher)
 		key = cipher
@@ -82,22 +84,21 @@ def comm(ip, cmd, port=9999, to=None):
 	dec = isinstance(cmd, str)
 	if dec:
 		cmd = cmd.encode()
-	try:
-		sock_tcp = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+	with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock_tcp:
 		if to:
 			sock_tcp.settimeout(to)
-		sock_tcp.connect((ip, port))
-		sock_tcp.settimeout(None)
-		sock_tcp.send(pack('>I', len(cmd)) + encrypt(cmd))
-		data = sock_tcp.recv(2048)
-		dlen = 4 + unpack('>I', data[:4])[0]
-		while len(data) < dlen:
-			data += sock_tcp.recv(2048)
-		sock_tcp.close()
-	except socket.error:
-		raise CommFailure("Could not connect to host %s:%d" % (ip, port))
-	finally:
-		sock_tcp.close()
+		try:
+			sock_tcp.connect((ip, port))
+		except socket.error:
+			raise CommFailure("Could not connect to host %s:%d" % (ip, port))
+		else:
+			sock_tcp.settimeout(None)
+			sock_tcp.send(pack('>I', len(cmd)) + encrypt(cmd))
+			data = sock_tcp.recv(2048)
+			dlen = 4 + unpack('>I', data[:4])[0]
+			while len(data) < dlen:
+				data += sock_tcp.recv(2048)
+			sock_tcp.shutdown(socket.SHUT_RDWR)
 	res = decrypt(data[4:])
 	return res.decode() if dec else res
 
@@ -122,7 +123,7 @@ if __name__ == '__main__':
 			if num < minnum or num > maxnum:
 				raise ValueError
 		except ValueError:
-			parser.error("Invalid %s number." % (numname,))
+			parser.error("Invalid %s number (must be %d-%d)." % (numname, minnum, maxnum))
 		return num
 
 
@@ -164,14 +165,16 @@ if __name__ == '__main__':
 
 	try:
 		reply = comm(args.target, cmd, port=args.port, to=args.timeout)
-		ec = len(reply) <= 0
 	except CommFailure as e:
-		print("<<%s>>" % (str(e),), file=stderr)
+		print("<<%s>>" % (str(e),), file=sys.stderr)
 		ec = 2
-	finally:
+	else:
+		ec = len(reply) <= 0
 		if args.naked_json:
 			print(reply)
 		elif not args.silent:
 			print("%-16s %s" % ("Sent(%d):" % (len(cmd),), cmd))
 			print("%-16s %s" % ("Received(%d):" % (len(reply),), reply))
 	sys.exit(ec)
+
+# vim: sts=4 sw=4 ts=4 noet ai si
