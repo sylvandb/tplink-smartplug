@@ -5,6 +5,7 @@
 #
 # by Lubomir Stroetmann
 # Copyright 2016 softScheck GmbH
+# Extensively modified by sylvan butler - github.com/sylvandb/tplink-smartplug
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -17,14 +18,13 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-#
 
 from __future__ import print_function
 import ipaddress
 import socket
 from struct import pack, unpack
 
-VERSION = 0.12
+VERSION = 0.13
 
 
 # Predefined Smart Plug Commands
@@ -176,7 +176,7 @@ if __name__ == '__main__':
         return cmd
 
 
-    def do_command(args):
+    def do_command(args, tag=False):
         cmd = cmd_lookup(args)
         try:
             reply = communicate(cmd, ip=args.target, port=args.port, timeout=args.timeout, udp=args.udp)
@@ -188,10 +188,14 @@ if __name__ == '__main__':
             ec = len(reply) <= 0
         if not ec:
             if args.naked_json:
-                print(reply)
+                if tag:
+                    print("{\"%s:%d\": %s}" % (args.target, args.port, reply))
+                else:
+                    print(reply)
             elif not args.silent:
-                print("%-16s %s" % ("Sent(%d):" % (len(cmd),), cmd))
-                print("%-16s %s" % ("Received(%d):" % (len(reply),), reply))
+                tag = "%s:%d - " % (args.target, args.port) if tag else ''
+                print("%-16s %s%s" % ("Sent(%d):"     % (len(cmd)  ,), tag, cmd))
+                print("%-16s %s%s" % ("Received(%d):" % (len(reply),), tag, reply))
         return ec
 
 
@@ -217,6 +221,25 @@ if __name__ == '__main__':
                 except AttributeError:
                     print('    resp:', reply)
         return not len(found)
+
+
+    def do_more(multitarget, args):
+        rv = 0
+        comma = False
+        if args.naked_json:
+            print("[")
+        for more in args.more:
+            if multitarget:
+                args.target = more
+            else:
+                args.command = more
+            if comma and args.naked_json:
+                print(", ", end='')
+            rv = (do_discover(args) if args.discover else do_command(args, tag=multitarget)) or rv
+            comma = True
+        if args.naked_json:
+            print("]")
+        return rv
 
 
     # Check if hostname is a valid ip address or network address or hostname
@@ -267,13 +290,31 @@ if __name__ == '__main__':
         help="Full JSON string of command to send")
     parser.add_argument("-a", "--argument", metavar="<value>",
         help="Some commands (bright) require an argument")
+    parser.add_argument('more', nargs=argparse.REMAINDER,
+        help="targets or commands - whichever is not specified by option")
 
     args = parser.parse_args()
 
-    if not args.target and not args.discover:
-        print("Target is required")
+
+    if not args.more:
+        if not args.target and not args.discover:
+            print("Target is required")
+            sys.exit(1)
+
+        sys.exit(do_discover(args) if args.discover else do_command(args))
+
+
+    multitarget = not args.target
+
+    if multitarget:
+        if args.json:
+            print("more args cannot combine with json command option")
+            sys.exit(1)
+
+    elif args.json or args.command:
+        print("more args cannot combine with both target and any command option")
         sys.exit(1)
 
-    sys.exit(do_discover(args) if args.discover else do_command(args))
+    sys.exit(do_more(multitarget, args))
 
 # vim: sts=4 sw=4 ts=4 et ai si
