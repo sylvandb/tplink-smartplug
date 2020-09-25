@@ -20,10 +20,11 @@
 #
 
 from __future__ import print_function
+import ipaddress
 import socket
 from struct import pack, unpack
 
-VERSION = 0.11
+VERSION = 0.12
 
 
 # Predefined Smart Plug Commands
@@ -79,42 +80,151 @@ def decrypt(string):
 class CommFailure(Exception):
     pass
 
+
 # Send command and receive reply
-def comm(ip, cmd, port=9999, to=None):
-    dec = isinstance(cmd, str)
-    if dec:
-        cmd = cmd.encode()
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock_tcp:
-        if to:
-            sock_tcp.settimeout(to)
+def communicate(cmd, udp=False, **kwargs):
+    if isinstance(cmd, str):
+        cmd = encrypt(cmd.encode())
+        def reverse(d):
+            return decrypt(d).decode()
+    else:
+        cmd = encrypt(cmd)
+        def reverse(d):
+            return decrypt(d)
+    res = _communicate_udp(cmd, **kwargs) if udp else _communicate_tcp(cmd, **kwargs)
+    if udp and kwargs.get('broadcast'):
+        res = {k: reverse(v) for k, v in res.items()}
+    else:
+        res = reverse(res)
+    return res
+
+
+def _communicate_tcp(cmd, ip, port=9999, timeout=None):
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        if timeout:
+            sock.settimeout(timeout)
         try:
-            sock_tcp.connect((ip, port))
+            sock.connect((ip, port))
         except socket.error:
             raise CommFailure("Could not connect to host %s:%d" % (ip, port))
         else:
-            sock_tcp.settimeout(None)
-            sock_tcp.send(pack('>I', len(cmd)) + encrypt(cmd))
-            data = sock_tcp.recv(2048)
+            sock.settimeout(None)
+            sock.send(pack('>I', len(cmd)) + cmd)
+            data = sock.recv(4096)
             dlen = 4 + unpack('>I', data[:4])[0]
             while len(data) < dlen:
-                data += sock_tcp.recv(2048)
-            sock_tcp.shutdown(socket.SHUT_RDWR)
-    res = decrypt(data[4:])
-    return res.decode() if dec else res
+                data += sock.recv(4096)
+            sock.shutdown(socket.SHUT_RDWR)
+    return data[4:]
+
+
+def _communicate_udp(cmd, ip, port=9999, timeout=None, broadcast=False):
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+        if broadcast:
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        # must have a timeout to avoid infinite loop/wait
+        sock.settimeout(timeout or 3)
+        # doesn't seem to use the length header???
+        sock.sendto(cmd, (ip, port))
+        res = {}
+        try:
+            while True:
+                resp, (respip, respport) = sock.recvfrom(4096)
+                if broadcast:
+                    res[respip] = resp
+                else:
+                    res = resp
+                    break
+        except socket.timeout:
+            if not broadcast:
+                raise CommFailure("No response from %s:%d" % (ip, port))
+    return res
+
+
+def discover_udp(cmd, tries=3, **kwargs):
+    """
+        Used to discover available devices on the local network
+        Sends cmd to target:port as UDP
+        Waits timeout for responses
+        ip is expected to be a broadcast address or network cidr
+        (an ip address or network address or 255.255.255.255)
+        return: dict keyed with ipaddress(es): {ipaddress: reply, ...}
+    """
+    found = {}
+    for i in range(tries):
+        found.update(communicate(cmd, udp=True, broadcast=True, **kwargs))
+    return found
 
 
 
 
 if __name__ == '__main__':
     import argparse
+    import json
     import sys
 
-    # Check if hostname is valid
+
+    # command to send
+    def cmd_lookup(args):
+        cmd = args.json if args.json else COMMANDS[args.command or 'info']
+        if not args.argument is None:
+            try:
+                cmd = cmd % (args.argument,)
+            except TypeError:
+                cmd = cmd % (int(args.argument),)
+        return cmd
+
+
+    def do_command(args):
+        cmd = cmd_lookup(args)
+        try:
+            reply = communicate(cmd, ip=args.target, port=args.port, timeout=args.timeout, udp=args.udp)
+        except CommFailure as e:
+            print("<<%s>>" % (str(e),), file=sys.stderr)
+            reply = None
+            ec = 2
+        else:
+            ec = len(reply) <= 0
+        if not ec:
+            if args.naked_json:
+                print(reply)
+            elif not args.silent:
+                print("%-16s %s" % ("Sent(%d):" % (len(cmd),), cmd))
+                print("%-16s %s" % ("Received(%d):" % (len(reply),), reply))
+        return ec
+
+
+    def do_discover(args):
+        cmd = cmd_lookup(args)
+        found = discover_udp(cmd, ip=args.target or '255.255.255.255', port=args.port, timeout=args.timeout)
+        if args.naked_json and found:
+            print("{")
+            comma = False
+            for ip, reply in found.items():
+                print('  %s"%s": %s' % (", " if comma else '', ip, reply))
+                comma = True
+            print("}")
+        elif not args.silent and found:
+            print("Found: %d" % (len(found),))
+            for ip, reply in found.items():
+                print('  %s:\n    fqdn: %s' % (ip, socket.getfqdn(ip)))
+                try:
+                    sysi = json.loads(reply).get('system', {}).get('get_sysinfo')
+                    for f in ('alias', 'model', 'dev_name', 'mac'):
+                        val = sysi.get(f, 'unknown')
+                        print('    %s: %s' % (f, val))
+                except AttributeError:
+                    print('    resp:', reply)
+        return not len(found)
+
+
+    # Check if hostname is a valid ip address or network address or hostname
     def validHostname(hostname):
         try:
-            socket.gethostbyname(hostname)
-        except socket.error:
-            parser.error("Invalid hostname.")
+            hostname = str(ipaddress.ip_network(hostname, strict=False).broadcast_address)
+        except ValueError:
+            hostname = socket.gethostbyname(hostname)
         return hostname
 
     def validNum(num, minnum, maxnum, numname):
@@ -130,51 +240,40 @@ if __name__ == '__main__':
     # Parse commandline arguments
     description="TP-Link Wi-Fi Smart Plug Client v%s" % (VERSION,)
     parser = argparse.ArgumentParser(description=description)
-    parser.add_argument("--version", action="version", version=description)
-    parser.add_argument("-n", "--naked-json", action='store_true',
+
+    group = parser.add_argument_group(title="Output format")
+    group.add_argument("-n", "--naked-json", action='store_true',
         help="Output only the JSON result")
-    parser.add_argument("-s", "--silent", action='store_true',
+    group.add_argument("-s", "--silent", action='store_true',
         help="No output")
 
-    parser.add_argument("-t", "--target", metavar="<hostname>", required=True, type=validHostname,
-        help="Target hostname or IP address")
-    parser.add_argument("-p", "--port", metavar="<port>", default=9999, type=lambda x: validNum(x, 1, 65535, 'port'),
+    group = parser.add_argument_group(title="Communication")
+    group.add_argument("-u", "--udp", action='store_true',
+        help="Use UDP instead of TCP")
+    group.add_argument("-d", "--discover", action='store_true',
+        help="Perform network discovery for device target(s)")
+    group.add_argument("-t", "--target", metavar="<hostname>", type=validHostname,
+        help="Target hostname or IP address (or broadcast address for discovery)")
+    group.add_argument("-p", "--port", metavar="<port>", default=9999, type=lambda x: validNum(x, 1, 65535, 'port'),
         help="Target port")
-    parser.add_argument("--timeout", default=10, type=lambda x: validNum(x, 0, 65535, 'timeout'),
+    group.add_argument("--timeout", default=10, type=lambda x: validNum(x, 0, 65535, 'timeout'),
         help="Timeout to establish connection, 0 for infinite")
-    parser.add_argument("-a", "--argument", metavar="<value>",
-        help="Some commands (bright) require an argument")
 
+    parser.add_argument("--version", action="version", version=description)
     group = parser.add_mutually_exclusive_group()
     group.add_argument("-c", "--command", metavar="<command>", choices=COMMANDS,
         help="Preset command to send. Choices are: "+", ".join(COMMANDS))
     group.add_argument("-j", "--json", metavar="<JSON string>",
         help="Full JSON string of command to send")
+    parser.add_argument("-a", "--argument", metavar="<value>",
+        help="Some commands (bright) require an argument")
 
     args = parser.parse_args()
 
+    if not args.target and not args.discover:
+        print("Target is required")
+        sys.exit(1)
 
-    # command to send
-    cmd = args.json if args.json else COMMANDS[args.command or 'info']
-    if not args.argument is None:
-        try:
-            cmd = cmd % (args.argument,)
-        except TypeError:
-            cmd = cmd % (int(args.argument),)
-    reply = ''
-
-    try:
-        reply = comm(args.target, cmd, port=args.port, to=args.timeout)
-    except CommFailure as e:
-        print("<<%s>>" % (str(e),), file=sys.stderr)
-        ec = 2
-    else:
-        ec = len(reply) <= 0
-        if args.naked_json:
-            print(reply)
-        elif not args.silent:
-            print("%-16s %s" % ("Sent(%d):" % (len(cmd),), cmd))
-            print("%-16s %s" % ("Received(%d):" % (len(reply),), reply))
-    sys.exit(ec)
+    sys.exit(do_discover(args) if args.discover else do_command(args))
 
 # vim: sts=4 sw=4 ts=4 et ai si
