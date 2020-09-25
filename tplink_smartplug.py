@@ -24,7 +24,7 @@ import ipaddress
 import socket
 from struct import pack, unpack
 
-VERSION = 0.13
+VERSION = 0.14
 
 
 # Predefined Smart Plug Commands
@@ -142,18 +142,32 @@ def _communicate_udp(cmd, ip, port=9999, timeout=None, broadcast=False):
     return res
 
 
-def discover_udp(cmd, tries=3, **kwargs):
+def discover_udp(cmd, trylimit=None, callback=None, **kwargs):
     """
         Used to discover available devices on the local network
-        Sends cmd to target:port as UDP
+        Sends cmd to target:port as UDP broadcast
+        Repeats until no new device responds, unless trylimit or callback
+        Repeats trylimit times, unless callback
+        Repeats until callback returns True-ish
         Waits timeout for responses
         ip is expected to be a broadcast address or network cidr
         (an ip address or network address or 255.255.255.255)
         return: dict keyed with ipaddress(es): {ipaddress: reply, ...}
     """
     found = {}
-    for i in range(tries):
+    nfound = -1 # makes it try again if none the first try
+    trynum = 0
+    while True:
         found.update(communicate(cmd, udp=True, broadcast=True, **kwargs))
+        trynum += 1
+        if callback:
+            if callback(trynum, found):
+                break
+        elif trylimit and trylimit <= trynum:
+            break
+        elif not trylimit and nfound == len(found):
+            break
+        nfound = len(found)
     return found
 
 
@@ -178,8 +192,9 @@ if __name__ == '__main__':
 
     def do_command(args, tag=False):
         cmd = cmd_lookup(args)
+        timeout = getattr(args, 'timeout', 5)
         try:
-            reply = communicate(cmd, ip=args.target, port=args.port, timeout=args.timeout, udp=args.udp)
+            reply = communicate(cmd, ip=args.target, port=args.port, timeout=timeout, udp=args.udp)
         except CommFailure as e:
             print("<<%s>>" % (str(e),), file=sys.stderr)
             reply = None
@@ -200,8 +215,17 @@ if __name__ == '__main__':
 
 
     def do_discover(args):
+        nfound = prev_nfound = -1
+        def discover_callback(trynum, found):
+            nonlocal nfound, prev_nfound
+            print("Found: %d (try %d)" % (len(found), trynum))
+            prev_nfound = nfound
+            nfound = len(found)
+            return nfound == prev_nfound
+        cb = None if (args.naked_json or args.silent) else discover_callback
         cmd = cmd_lookup(args)
-        found = discover_udp(cmd, ip=args.target or '255.255.255.255', port=args.port, timeout=args.timeout)
+        timeout = getattr(args, 'timeout', 1)
+        found = discover_udp(cmd, ip=args.target or '255.255.255.255', port=args.port, timeout=timeout, callback=cb)
         if args.naked_json and found:
             print("{")
             comma = False
@@ -210,7 +234,6 @@ if __name__ == '__main__':
                 comma = True
             print("}")
         elif not args.silent and found:
-            print("Found: %d" % (len(found),))
             for ip, reply in found.items():
                 print('  %s:\n    fqdn: %s' % (ip, socket.getfqdn(ip)))
                 try:
@@ -247,7 +270,10 @@ if __name__ == '__main__':
         try:
             hostname = str(ipaddress.ip_network(hostname, strict=False).broadcast_address)
         except ValueError:
-            hostname = socket.gethostbyname(hostname)
+            try:
+                hostname = socket.gethostbyname(hostname)
+            except:
+                raise argparse.ArgumentTypeError('Invalid hostname/address "%s"' % (hostname,))
         return hostname
 
     def validNum(num, minnum, maxnum, numname):
@@ -256,7 +282,7 @@ if __name__ == '__main__':
             if num < minnum or num > maxnum:
                 raise ValueError
         except ValueError:
-            parser.error("Invalid %s number (must be %d-%d)." % (numname, minnum, maxnum))
+            raise argparse.ArgumentTypeError("Invalid %s number (must be %d-%d)." % (numname, minnum, maxnum))
         return num
 
 
@@ -279,7 +305,7 @@ if __name__ == '__main__':
         help="Target hostname or IP address (or broadcast address for discovery)")
     group.add_argument("-p", "--port", metavar="<port>", default=9999, type=lambda x: validNum(x, 1, 65535, 'port'),
         help="Target port")
-    group.add_argument("--timeout", default=10, type=lambda x: validNum(x, 0, 65535, 'timeout'),
+    group.add_argument("--timeout", default=argparse.SUPPRESS, type=lambda x: validNum(x, 0, 65535, 'timeout'),
         help="Timeout to establish connection, 0 for infinite")
 
     parser.add_argument("--version", action="version", version=description)
