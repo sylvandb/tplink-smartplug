@@ -24,26 +24,28 @@ import ipaddress
 import socket
 from struct import pack, unpack
 
-VERSION = 0.14
+VERSION = 0.15
 
 
 # Predefined Smart Plug Commands
 # For a full list of commands, consult tplink_commands.txt
 COMMANDS = {
-    'info'     : '{"system":{"get_sysinfo":{}}}',
-    'on'       : '{"system":{"set_relay_state":{"state":1}}}',
-    'off'      : '{"system":{"set_relay_state":{"state":0}}}',
-    'ledoff'   : '{"system":{"set_led_off":{"off":1}}}',
-    'ledon'    : '{"system":{"set_led_off":{"off":0}}}',
-    'cloudinfo': '{"cnCloud":{"get_info":{}}}',
-    'wlanscan' : '{"netif":{"get_scaninfo":{"refresh":0}}}',
-    'time'     : '{"time":{"get_time":{}}}',
-    'schedule' : '{"schedule":{"get_rules":{}}}',
-    'countdown': '{"count_down":{"get_rules":{}}}',
-    'antitheft': '{"anti_theft":{"get_rules":{}}}',
-    'reboot'   : '{"system":{"reboot":{"delay":1}}}',
-    'reset'    : '{"system":{"reset":{"delay":1}}}',
-    'energy'   : '{"emeter":{"get_realtime":{}}}',
+    'info'     : '{"system": {"get_sysinfo": {}}}',
+    'on'       : '{"system": {"set_relay_state": {"state": 1}}}',
+    'off'      : '{"system": {"set_relay_state": {"state": 0}}}',
+    'ledoff'   : '{"system": {"set_led_off": {"off": 1}}}',
+    'ledon'    : '{"system": {"set_led_off": {"off": 0}}}',
+    'wlanscan' : '{"netif": {"get_scaninfo": {"refresh": 0}}}',
+    'time'     : '{"time": {"get_time": {}}}',
+    'schedule' : '{"schedule": {"get_rules": {}}}',
+    'countdown': '{"count_down": {"get_rules": {}}}',
+    'antitheft': '{"anti_theft": {"get_rules": {}}}',
+    'reboot'   : '{"system": {"reboot": {"delay": 1}}}',
+    'reset'    : '{"system": {"reset": {"delay": 1}}}',
+    'energy'   : '{"emeter": {"get_realtime": {}}}',
+    'cloudinfo': '{"cnCloud": {"get_info": {}}}',
+    'bind'     : '{"cnCloud": {"bind": {"username": "%s", "password": "%s"}}}',
+    'unbind'   : '{"cnCloud": {"unbind": ""}}',
 # HS220
     'bright'   : '{"smartlife.iot.dimmer": {"set_brightness": {"brightness": %d}}}'
 }
@@ -78,6 +80,9 @@ def decrypt(string):
 
 
 class CommFailure(Exception):
+    pass
+
+class MissingArg(Exception):
     pass
 
 
@@ -182,7 +187,13 @@ if __name__ == '__main__':
     # command to send
     def cmd_lookup(args):
         cmd = args.json if args.json else COMMANDS[args.command or 'info']
-        if not args.argument is None:
+        if args.command == 'bind':
+            if not args.username or not args.password:
+                raise MissingArg("bind requires username and password")
+            cmd = cmd % (args.username, args.password)
+        if '%d' in cmd or '%s' in cmd:
+            if args.argument is None:
+                raise MissingArg("Missing argument for '%s'" % ((args.json or args.command),))
             try:
                 cmd = cmd % (args.argument,)
             except TypeError:
@@ -309,11 +320,17 @@ if __name__ == '__main__':
         help="Timeout to establish connection, 0 for infinite")
 
     parser.add_argument("--version", action="version", version=description)
+
     group = parser.add_mutually_exclusive_group()
     group.add_argument("-c", "--command", metavar="<command>", choices=COMMANDS,
         help="Preset command to send. Choices are: "+", ".join(COMMANDS))
     group.add_argument("-j", "--json", metavar="<JSON string>",
         help="Full JSON string of command to send")
+
+    parser.add_argument("--username",
+        help="Required username for bind")
+    parser.add_argument("--password",
+        help="Required password for bind")
     parser.add_argument("-a", "--argument", metavar="<value>",
         help="Some commands (bright) require an argument")
     parser.add_argument('more', nargs=argparse.REMAINDER,
@@ -322,25 +339,31 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
 
-    if not args.more:
-        if not args.target and not args.discover:
-            print("Target is required")
+    try:
+
+        if not args.more:
+            if not args.target and not args.discover:
+                print("Target is required")
+                sys.exit(1)
+
+            sys.exit(do_discover(args) if args.discover else do_command(args))
+
+
+        multitarget = not args.target
+
+        if multitarget:
+            if args.json:
+                print("more args cannot combine with json command option")
+                sys.exit(1)
+
+        elif args.json or args.command:
+            print("more args cannot combine with both target and any command option")
             sys.exit(1)
 
-        sys.exit(do_discover(args) if args.discover else do_command(args))
+        sys.exit(do_more(multitarget, args))
 
-
-    multitarget = not args.target
-
-    if multitarget:
-        if args.json:
-            print("more args cannot combine with json command option")
-            sys.exit(1)
-
-    elif args.json or args.command:
-        print("more args cannot combine with both target and any command option")
+    except MissingArg as e:
+        print(e)
         sys.exit(1)
-
-    sys.exit(do_more(multitarget, args))
 
 # vim: sts=4 sw=4 ts=4 et ai si
