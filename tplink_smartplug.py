@@ -19,12 +19,27 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from __future__ import print_function
 import ipaddress
+import json
 import socket
 from struct import pack, unpack
+try:
+    from tplink_children import ChildMap
+except ImportError:
+    # example: {target: (real_target, child_id), ...}
+    #   target is the hostname or ip address (less useful) specified
+    #   real_target is the parent hostname or ip address
+    #   child_id is the 'Id' value of the intended child
+    # probably want to alias child hostnames to the parent IP address
+    ChildMap = {
+        'child1': ('parent', 'parent_deviceId00'),
+        'child2': ('parent', 'parent_deviceId01'),
+        'child3': ('parent', 'parent_deviceId02'),
+    }
+    # must have a dictionary ({} for no default map)
+    ChildMap = {}
 
-VERSION = 0.15
+VERSION = 0.16
 
 
 # Predefined Smart Plug Commands
@@ -87,7 +102,7 @@ class MissingArg(Exception):
 
 
 # Send command and receive reply
-def communicate(cmd, udp=False, **kwargs):
+def communicate(cmd, *, udp=False, broadcast=False, **kwargs):
     if isinstance(cmd, str):
         cmd = encrypt(cmd.encode())
         def reverse(d):
@@ -96,15 +111,15 @@ def communicate(cmd, udp=False, **kwargs):
         cmd = encrypt(cmd)
         def reverse(d):
             return decrypt(d)
-    res = _communicate_udp(cmd, **kwargs) if udp else _communicate_tcp(cmd, **kwargs)
-    if udp and kwargs.get('broadcast'):
+    res = _communicate_udp(cmd, broadcast=broadcast, **kwargs) if udp else _communicate_tcp(cmd, **kwargs)
+    if udp and broadcast:
         res = {k: reverse(v) for k, v in res.items()}
     else:
         res = reverse(res)
     return res
 
 
-def _communicate_tcp(cmd, ip, port=9999, timeout=None):
+def _communicate_tcp(cmd, *, ip, port=9999, timeout=None, **kwargs):
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         if timeout:
             sock.settimeout(timeout)
@@ -123,7 +138,7 @@ def _communicate_tcp(cmd, ip, port=9999, timeout=None):
     return data[4:]
 
 
-def _communicate_udp(cmd, ip, port=9999, timeout=None, broadcast=False):
+def _communicate_udp(cmd, *, ip, port=9999, timeout=None, broadcast=False, **kwargs):
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
         if broadcast:
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
@@ -150,7 +165,7 @@ def _communicate_udp(cmd, ip, port=9999, timeout=None, broadcast=False):
 def discover_udp(cmd, trylimit=None, callback=None, **kwargs):
     """
         Used to discover available devices on the local network
-        Sends cmd to target:port as UDP broadcast
+        Sends cmd to ip:port as UDP broadcast
         Repeats until no new device responds, unless trylimit or callback
         Repeats trylimit times, unless callback
         Repeats until callback returns True-ish
@@ -176,36 +191,72 @@ def discover_udp(cmd, trylimit=None, callback=None, **kwargs):
     return found
 
 
+# command to send
+def cmd_lookup(*, command=None, json=None, username=None, password=None, argument=None):
+    cmd = json if json else COMMANDS[command or 'info']
+    if command == 'bind':
+        if not username or not password:
+            raise MissingArg("%s requires username and password" % (command,))
+        cmd = cmd % (username, password)
+    if '%d' in cmd or '%s' in cmd:
+        if argument is None:
+            raise MissingArg("Missing argument for '%s'" % ((json or command),))
+        try:
+            cmd = cmd % (argument,)
+        except TypeError:
+            cmd = cmd % (int(argument),)
+    return cmd
+
+
+def get_sysinfo(**kwargs):
+    reply = communicate(cmd_lookup(command='info'), **kwargs)
+    return json.loads(reply).get('system', {}).get('get_sysinfo')
+
+
+def add_cmd_context(cmd, child, **kwargs):
+    try:
+        child = int(child)
+    except ValueError:
+        pass
+    else:
+        child = '%s%02x' % (get_sysinfo(**kwargs)['deviceId'], child)
+    return '{"context": {"child_ids": ["%s"]},' % (child,) + cmd[1:]
+
+
 
 
 if __name__ == '__main__':
     import argparse
-    import json
     import sys
 
 
-    # command to send
-    def cmd_lookup(args):
-        cmd = args.json if args.json else COMMANDS[args.command or 'info']
-        if args.command == 'bind':
-            if not args.username or not args.password:
-                raise MissingArg("bind requires username and password")
-            cmd = cmd % (args.username, args.password)
-        if '%d' in cmd or '%s' in cmd:
-            if args.argument is None:
-                raise MissingArg("Missing argument for '%s'" % ((args.json or args.command),))
+    def _cmd_lookup(args):
+        return cmd_lookup(**_args_to_dict(args, 'json', 'command', 'username', 'password', 'argument'))
+
+    def _args_to_dict(args, *which, xlate={}):
+        d = {attr: getattr(args, attr) for attr in which}
+        d.update({key: getattr(args, attr) for attr, key in xlate.items()})
+        return d
+
+
+    def do_command(args, nested=False):
+        commargs = _args_to_dict(args, 'port', 'udp', xlate={'target': 'ip'})
+        commargs['timeout'] = getattr(args, 'timeout', 5)
+        cmd = _cmd_lookup(args)
+        if args.child:
+            cmd = add_cmd_context(cmd, args.child, **commargs)
+        else:
             try:
-                cmd = cmd % (args.argument,)
-            except TypeError:
-                cmd = cmd % (int(args.argument),)
-        return cmd
-
-
-    def do_command(args, tag=False):
-        cmd = cmd_lookup(args)
-        timeout = getattr(args, 'timeout', 5)
+                try:
+                    child = ChildMap[OrigTarget]
+                except KeyError:
+                    child = ChildMap[args.target]
+            except KeyError:
+                pass
+            else:
+                cmd = add_cmd_context(cmd, child, **commargs)
         try:
-            reply = communicate(cmd, ip=args.target, port=args.port, timeout=timeout, udp=args.udp)
+            reply = communicate(cmd, **commargs)
         except CommFailure as e:
             print("<<%s>>" % (str(e),), file=sys.stderr)
             reply = None
@@ -214,14 +265,14 @@ if __name__ == '__main__':
             ec = len(reply) <= 0
         if not ec:
             if args.naked_json:
-                if tag:
+                if nested:
                     print("{\"%s:%d\": %s}" % (args.target, args.port, reply))
                 else:
                     print(reply)
             elif not args.silent:
-                tag = "%s:%d - " % (args.target, args.port) if tag else ''
-                print("%-16s %s%s" % ("Sent(%d):"     % (len(cmd)  ,), tag, cmd))
-                print("%-16s %s%s" % ("Received(%d):" % (len(reply),), tag, reply))
+                nested = "%s:%d - " % (args.target, args.port) if nested else ''
+                print("%-16s %s%s" % ("Sent(%d):"     % (len(cmd)  ,), nested, cmd))
+                print("%-16s %s%s" % ("Received(%d):" % (len(reply),), nested, reply))
         return ec
 
 
@@ -234,9 +285,13 @@ if __name__ == '__main__':
             nfound = len(found)
             return nfound == prev_nfound
         cb = None if (args.naked_json or args.silent) else discover_callback
-        cmd = cmd_lookup(args)
-        timeout = getattr(args, 'timeout', 1)
-        found = discover_udp(cmd, ip=args.target or '255.255.255.255', port=args.port, timeout=timeout, callback=cb)
+        commargs = {
+            'ip': args.target or '255.255.255.255',
+            'port': args.port,
+            'timeout': getattr(args, 'timeout', 1),
+        }
+        cmd = _cmd_lookup(args)
+        found = discover_udp(cmd, callback=cb, **commargs)
         if args.naked_json and found:
             print("{")
             comma = False
@@ -269,7 +324,7 @@ if __name__ == '__main__':
                 args.command = more
             if comma and args.naked_json:
                 print(", ", end='')
-            rv = (do_discover(args) if args.discover else do_command(args, tag=multitarget)) or rv
+            rv = (do_discover(args) if args.discover else do_command(args, nested=multitarget)) or rv
             comma = True
         if args.naked_json:
             print("]")
@@ -277,7 +332,11 @@ if __name__ == '__main__':
 
 
     # Check if hostname is a valid ip address or network address or hostname
+    # remember original target
+    OrigTarget = None
     def validHostname(hostname):
+        global OrigTarget
+        OrigTarget = hostname
         try:
             hostname = str(ipaddress.ip_network(hostname, strict=False).broadcast_address)
         except ValueError:
@@ -316,6 +375,9 @@ if __name__ == '__main__':
         help="Target hostname or IP address (or broadcast address for discovery)")
     group.add_argument("-p", "--port", metavar="<port>", default=9999, type=lambda x: validNum(x, 1, 65535, 'port'),
         help="Target port")
+    group.add_argument("-k", "--kindes", "--child", metavar="<child>", dest='child',
+        help="Specify for multi-unit devices the number or ID of the child to control, defined: " +
+        ", ".join(ChildMap.keys()))
     group.add_argument("--timeout", default=argparse.SUPPRESS, type=lambda x: validNum(x, 0, 65535, 'timeout'),
         help="Timeout to establish connection, 0 for infinite")
 
