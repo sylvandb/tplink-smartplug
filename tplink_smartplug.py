@@ -43,26 +43,27 @@ VERSION = 0.16
 
 
 # Predefined Smart Plug Commands
-# For a full list of commands, consult tplink_commands.txt
+# For a full list of commands, consult tplink-smarthome-commands.txt
 COMMANDS = {
     'info'     : '{"system": {"get_sysinfo": {}}}',
     'on'       : '{"system": {"set_relay_state": {"state": 1}}}',
     'off'      : '{"system": {"set_relay_state": {"state": 0}}}',
     'ledoff'   : '{"system": {"set_led_off": {"off": 1}}}',
     'ledon'    : '{"system": {"set_led_off": {"off": 0}}}',
+    'reboot'   : '{"system": {"reboot": {"delay": 1}}}',
+    'reset'    : '{"system": {"reset": {"delay": 1}}}', # reset to factory defaults
     'wlanscan' : '{"netif": {"get_scaninfo": {"refresh": 0}}}',
+    #'wlanssid' : '{"netif":{"set_stainfo":{"ssid":"%s","password":"%s","key_type":3}}}',
     'time'     : '{"time": {"get_time": {}}}',
     'schedule' : '{"schedule": {"get_rules": {}}}',
     'countdown': '{"count_down": {"get_rules": {}}}',
-    'antitheft': '{"anti_theft": {"get_rules": {}}}',
-    'reboot'   : '{"system": {"reboot": {"delay": 1}}}',
-    'reset'    : '{"system": {"reset": {"delay": 1}}}',
+    'away'     : '{"anti_theft": {"get_rules": {}}}',
     'energy'   : '{"emeter": {"get_realtime": {}}}',
     'cloudinfo': '{"cnCloud": {"get_info": {}}}',
     'bind'     : '{"cnCloud": {"bind": {"username": "%s", "password": "%s"}}}',
     'unbind'   : '{"cnCloud": {"unbind": ""}}',
 # HS220
-    'bright'   : '{"smartlife.iot.dimmer": {"set_brightness": {"brightness": %d}}}'
+    'bright'   : '{"smartlife.iot.dimmer": {"set_brightness": {"brightness": %d}}}',
 }
 
 
@@ -384,8 +385,8 @@ if __name__ == '__main__':
     parser.add_argument("--version", action="version", version=description)
 
     group = parser.add_mutually_exclusive_group()
-    group.add_argument("-c", "--command", metavar="<command>", choices=COMMANDS,
-        help="Preset command to send. Choices are: "+", ".join(COMMANDS))
+    group.add_argument("-c", "--command", metavar="<command>", choices=COMMANDS.keys(),
+        help="Preset command to send. Choices are: "+", ".join(COMMANDS.keys()))
     group.add_argument("-j", "--json", metavar="<JSON string>",
         help="Full JSON string of command to send")
 
