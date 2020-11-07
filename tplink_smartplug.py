@@ -74,27 +74,21 @@ COMMANDS = {
 # XOR Autokey Cipher with starting key
 _STARTING_KEY = 171
 
-def encrypt(string):
-    chars = isinstance(string[0], str)
-    if chars:
-        string = map(ord, string)
+def encrypt(bytestring):
     key = _STARTING_KEY
     result = []
-    for plain in string:
+    for plain in bytestring:
         key ^= plain
         result.append(key)
-    return b''.join(map(chr, result)) if chars else bytes(result)
+    return bytes(result)
 
-def decrypt(string):
-    chars = isinstance(string[0], str)
-    if chars:
-        string = map(ord, string)
+def decrypt(bytestring):
     key = _STARTING_KEY
     result = []
-    for cipher in string:
+    for cipher in bytestring:
         result.append(key ^ cipher)
         key = cipher
-    return b''.join(map(chr, result)) if chars else bytes(result)
+    return bytes(result)
 
 
 
@@ -113,14 +107,9 @@ def communicate(cmd, *, udp=False, broadcast=False, **kwargs):
             return decrypt(d).decode()
     else:
         cmd = encrypt(cmd)
-        def reverse(d):
-            return decrypt(d)
+        reverse = decrypt
     res = _communicate_udp(cmd, broadcast=broadcast, **kwargs) if udp else _communicate_tcp(cmd, **kwargs)
-    if udp and broadcast:
-        res = {k: reverse(v) for k, v in res.items()}
-    else:
-        res = reverse(res)
-    return res
+    return {k: reverse(v) for k, v in res.items()} if udp and broadcast else reverse(res)
 
 
 def _communicate_tcp(cmd, *, ip, port=9999, timeout=None, **kwargs):
