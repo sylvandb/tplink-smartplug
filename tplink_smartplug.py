@@ -23,6 +23,7 @@ import ipaddress
 import json
 import socket
 from struct import pack, unpack
+import time
 try:
     from tplink_children import ChildMap
 except ImportError:
@@ -39,7 +40,7 @@ except ImportError:
     # must have a dictionary ({} for no default map)
     ChildMap = {}
 
-VERSION = 0.16
+VERSION = 0.17
 
 
 # Predefined Smart Plug Commands
@@ -55,12 +56,14 @@ COMMANDS = {
     'wlanscan' : '{"netif": {"get_scaninfo": {"refresh": 0}}}',
     #'wlanssid' : '{"netif":{"set_stainfo":{"ssid":"%s","password":"%s","key_type":3}}}',
     'time'     : '{"time": {"get_time": {}}}',
+    'settime'  : '{"time": {"set_timezone": '
+        '{"year": %(yr)d, "month": %(mo)d, "mday": %(md)d, "hour": %(hr)d, "min": %(mi)d, "sec": %(se)d, "index": 42}}}',
     'schedule' : '{"schedule": {"get_rules": {}}}',
     'countdown': '{"count_down": {"get_rules": {}}}',
     'away'     : '{"anti_theft": {"get_rules": {}}}',
     'energy'   : '{"emeter": {"get_realtime": {}}}',
     'cloudinfo': '{"cnCloud": {"get_info": {}}}',
-    'bind'     : '{"cnCloud": {"bind": {"username": "%s", "password": "%s"}}}',
+    'bind'     : '{"cnCloud": {"bind": {"username": "%(user)s", "password": "%(pass)s"}}}',
     'unbind'   : '{"cnCloud": {"unbind": ""}}',
 # HS220
     'bright'   : '{"smartlife.iot.dimmer": {"set_brightness": {"brightness": %d}}}',
@@ -192,14 +195,32 @@ def discover_udp(cmd, trylimit=None, callback=None, **kwargs):
     return found
 
 
+def time_dict(when=None):
+    if when is None:
+        when = time.localtime()
+    try:
+        _ = when.tm_year
+    except AttributeError:
+        when = time.localtime(int(when))
+    return {
+        'yr': when.tm_year,
+        'mo': when.tm_mon,
+        'md': when.tm_mday,
+        'hr': when.tm_hour,
+        'mi': when.tm_min,
+        'se': when.tm_sec,
+    }
+
 # command to send
 def cmd_lookup(*, command=None, json=None, username=None, password=None, argument=None):
     cmd = json if json else COMMANDS[command or 'info']
     if command == 'bind':
         if not username or not password:
             raise MissingArg("%s requires username and password" % (command,))
-        cmd = cmd % (username, password)
-    if '%d' in cmd or '%s' in cmd:
+        cmd = cmd % {'user': username, 'pass': password}
+    elif command == 'settime':
+        cmd = cmd % time_dict(when=argument)
+    if '%d' in cmd or '%s' in cmd or '%(' in cmd:
         if argument is None:
             raise MissingArg("Missing argument for '%s'" % ((json or command),))
         try:
@@ -395,7 +416,7 @@ if __name__ == '__main__':
     parser.add_argument("--password",
         help="Required password for bind")
     parser.add_argument("-a", "--argument", metavar="<value>",
-        help="Some commands (bright) require an argument")
+        help="Some commands (bright) require an argument, others (settime) accept an optional arg")
     parser.add_argument('more', nargs=argparse.REMAINDER,
         help="targets or commands - whichever is not specified by option")
 
