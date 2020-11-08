@@ -40,7 +40,7 @@ except ImportError:
     # must have a dictionary ({} for no default map)
     ChildMap = {}
 
-VERSION = 0.17
+VERSION = 0.18
 
 
 # Predefined Smart Plug Commands
@@ -53,6 +53,9 @@ COMMANDS = {
     'ledon'    : '{"system": {"set_led_off": {"off": 0}}}',
     'reboot'   : '{"system": {"reboot": {"delay": 1}}}',
     'reset'    : '{"system": {"reset": {"delay": 1}}}', # reset to factory defaults
+    'setalias' : '{"system": {"set_dev_alias": {"alias": "%s"}}}',
+    'alias'    : lambda **a: get_sysinfo_field('alias', **a),
+    'state'    : lambda **a: get_sysinfo_field('relay_state', **a),
     'wlanscan' : '{"netif": {"get_scaninfo": {"refresh": 0}}}',
     #'wlanssid' : '{"netif":{"set_stainfo":{"ssid":"%s","password":"%s","key_type":3}}}',
     'time'     : '{"time": {"get_time": {}}}',
@@ -91,6 +94,9 @@ def decrypt(bytestring):
     return bytes(result)
 
 
+
+class CallableCmd(Exception):
+    pass
 
 class CommFailure(Exception):
     pass
@@ -203,7 +209,11 @@ def time_dict(when=None):
 # command to send
 def cmd_lookup(*, command=None, json=None, username=None, password=None, argument=None):
     cmd = json if json else COMMANDS[command or 'info']
-    if command == 'bind':
+    if callable(cmd):
+        e = CallableCmd(command)
+        e.cmd = cmd
+        raise e
+    elif command == 'bind':
         if not username or not password:
             raise MissingArg("%s requires username and password" % (command,))
         cmd = cmd % {'user': username, 'pass': password}
@@ -219,19 +229,52 @@ def cmd_lookup(*, command=None, json=None, username=None, password=None, argumen
     return cmd
 
 
-def get_sysinfo(**kwargs):
-    reply = communicate(cmd_lookup(command='info'), **kwargs)
+def get_sysinfo(**commargs):
+    reply = communicate(cmd_lookup(command='info'), **commargs)
     return json.loads(reply).get('system', {}).get('get_sysinfo')
 
 
-def add_cmd_context(cmd, child, **kwargs):
+def get_sysinfo_field(field, child_id=None, **commargs):
+    info = get_sysinfo(**commargs)
+    # index into a specified child
+    if child_id:
+        try:
+            info = [c for c in info['children'] if c['id'] == child_id][0]
+        except IndexError:
+            return None
     try:
-        child = int(child)
-    except ValueError:
-        pass
+        return info[field]
+    except KeyError:
+        if field == 'relay_state':
+            return info.get('state')
+
+
+def get_child_id(target, childspec=None, **commargs):
+    child_id = None
+    if childspec is not None:
+        try:
+            childnum = int(childspec)
+        except ValueError:
+            child_id = childspec
+        else:
+            # child 'Id' is parent 'deviceId' + 2-digit-childnum
+            child_id = '%s%02x' % (get_sysinfo(**commargs)['deviceId'], childnum)
     else:
-        child = '%s%02x' % (get_sysinfo(**kwargs)['deviceId'], child)
-    return '{"context": {"child_ids": ["%s"]},' % (child,) + cmd[1:]
+        # check the ChildMap for the target
+        try:
+            try:
+                # typical case - a hostname was specified
+                target, child_id = ChildMap[OrigTarget]
+            except KeyError:
+                target, child_id = ChildMap[target]
+        except KeyError:
+            # no ChildMap
+            pass
+    return target, child_id
+
+
+def add_child_context(cmd, child_id=None, **kwargs):
+    return '{"context": {"child_ids": ["%s"]}, %s' % (child_id, cmd[1:]) if child_id else cmd
 
 
 
@@ -253,19 +296,13 @@ if __name__ == '__main__':
     def do_command(args, nested=False):
         commargs = _args_to_dict(args, 'port', 'udp', xlate={'target': 'ip'})
         commargs['timeout'] = getattr(args, 'timeout', 5)
-        cmd = _cmd_lookup(args)
-        if args.child:
-            cmd = add_cmd_context(cmd, args.child, **commargs)
-        else:
-            try:
-                try:
-                    child = ChildMap[OrigTarget]
-                except KeyError:
-                    child = ChildMap[args.target]
-            except KeyError:
-                pass
-            else:
-                cmd = add_cmd_context(cmd, child, **commargs)
+        commargs['ip'], commargs['child_id'] = get_child_id(args.target, args.child, **commargs)
+        try:
+            cmd = _cmd_lookup(args)
+        except CallableCmd as e:
+            print('%r' % (e.cmd(**commargs),))
+            return 0
+        cmd = add_child_context(cmd, **commargs)
         try:
             reply = communicate(cmd, **commargs)
         except CommFailure as e:
