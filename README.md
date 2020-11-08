@@ -44,19 +44,6 @@ Provide the target IP using `-t` and a command to send using either `-c` or `-j`
 
 More advanced commands such as creating or editing rules can be issued using the `-j` flag by providing the full JSON string for the command. Please consult [tplink-smarthome-commands.txt](tplink-smarthome-commands.txt) for a comprehensive list of commands.
 
-## Docker ##
-
-##### Build ####
-
-   `docker build -t tplink-smartplug .`
-
-#### Usage ####
-
-   `docker run -it --rm tplink-smartplug -t <ip> [-c <cmd> || -j <json>]`
-
-#### usage tddp-client over udp ####
-
-   `docker run -it -p 61000:61000/udp --rm --entrypoint python tplink-smartplug ./tddp-client/tddp-client.py -t <ip> -u username -p password -c 0A`
 
 ## Wireshark Dissector ##
 
@@ -101,3 +88,17 @@ Reading out the WAN link status on an Archer C9 in default configuration shows t
    Reply Data:   Version 02 Type 03 Status 00 Length 00000018 ID 0001 Subtype 0e
    Decrypted:    wan_ph_link 1 0
    ```
+
+## Docker ##
+
+##### Build ####
+
+   `docker build -t tplink-smartplug .`
+
+#### Usage ####
+
+   `docker run -it --rm tplink-smartplug -t <ip> [-c <cmd> || -j <json>]`
+
+#### usage tddp-client over udp ####
+
+   `docker run -it -p 61000:61000/udp --rm --entrypoint python3 tplink-smartplug ./tddp-client/tddp-client.py -t <ip> -u username -p password -c 0A`
