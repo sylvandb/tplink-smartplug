@@ -27,20 +27,24 @@ import time
 try:
     from tplink_children import ChildMap
 except ImportError:
-    # example: {target: (real_target, child_id), ...}
-    #   target is the hostname or ip address (less useful) specified
-    #   real_target is the parent hostname or ip address
-    #   child_id is the 'Id' value of the intended child
-    # probably want to alias child hostnames to the parent IP address
+    # * example: {alias: (real_target, child_id), ...}
+    #   - alias is specified - first of child alias/number/id or the target
+    #   - real_target is the parent device hostname or ip address
+    #   - child_id is the 'Id' value of the child to inspect/control
+    #     which is typically the parent deviceId with a two digit suffix
+    # * if child hostnames are aliased to the parent IP address then can
+    #   use the child alias as the target name (no child option needed)
+    # * if real_target is specified (not None) it will override any target
+    #   specified while using the child alias option
     ChildMap = {
-        'child1': ('parent', 'parent_deviceId00'),
-        'child2': ('parent', 'parent_deviceId01'),
-        'child3': ('parent', 'parent_deviceId02'),
+        'childalias1': ('parent_ip', 'parent_deviceId00'),
+        'childalias2': ('parent_ip', 'parent_deviceId01'),
+        'childalias3': ('parent_ip', 'parent_deviceId02'),
     }
     # must have a dictionary ({} for no default map)
     ChildMap = {}
 
-VERSION = 0.18
+VERSION = 0.19
 
 
 # Predefined Smart Plug Commands
@@ -252,13 +256,18 @@ def get_sysinfo_field(field, child_id=None, **commargs):
 def get_child_id(target, childspec=None, **commargs):
     child_id = None
     if childspec is not None:
-        try:
-            childnum = int(childspec)
-        except ValueError:
-            child_id = childspec
-        else:
-            # child 'Id' is parent 'deviceId' + 2-digit-childnum
-            child_id = '%s%02x' % (get_sysinfo(**commargs)['deviceId'], childnum)
+        try: # alias
+            maybe_target, child_id = ChildMap[childspec]
+            if maybe_target:
+                target = maybe_target
+        except KeyError:
+            try:
+                childnum = int(childspec)
+            except ValueError:
+                child_id = childspec
+            else:
+                # child 'Id' is parent 'deviceId' + 2-digit-childnum
+                child_id = '%s%02x' % (get_sysinfo(**commargs)['deviceId'], childnum)
     else:
         # check the ChildMap for the target
         try:
@@ -424,8 +433,8 @@ if __name__ == '__main__':
     group.add_argument("-p", "--port", metavar="<port>", default=9999, type=lambda x: validNum(x, 1, 65535, 'port'),
         help="Target port")
     group.add_argument("-k", "--kindes", "--child", metavar="<child>", dest='child',
-        help="Specify for multi-unit devices the number or ID of the child to control, defined: " +
-        ", ".join(ChildMap.keys()))
+        help="Specify for multi-unit devices the alias, number or ID of the child to control. Aliases: " +
+        (", ".join(ChildMap.keys()) or 'NONE'))
     group.add_argument("--timeout", default=argparse.SUPPRESS, type=lambda x: validNum(x, 0, 65535, 'timeout'),
         help="Timeout to establish connection, 0 for infinite")
 
