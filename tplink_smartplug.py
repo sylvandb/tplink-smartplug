@@ -68,10 +68,15 @@ COMMANDS = {
     'schedule' : '{"schedule": {"get_rules": {}}}',
     'countdown': '{"count_down": {"get_rules": {}}}',
     'away'     : '{"anti_theft": {"get_rules": {}}}',
-    'energy'   : '{"emeter": {"get_realtime": {}}}',
     'cloudinfo': '{"cnCloud": {"get_info": {}}}',
     'bind'     : '{"cnCloud": {"bind": {"username": "%(user)s", "password": "%(pass)s"}}}',
     'unbind'   : '{"cnCloud": {"unbind": ""}}',
+# ???
+    'tempinfo' : '{"emeter":{"get_tempinfo": {} }}',
+# HS110, KP115, maybe KP125
+    'energy'   : '{"emeter": {"get_realtime": {}}}',
+    'energy-reset':
+        '{"emeter": {"erase_emeter_stat": {}}}',
 # HS220
     'bright'   : '{"smartlife.iot.dimmer": {"set_brightness": {"brightness": %d}}}',
 }
