@@ -44,7 +44,7 @@ except ImportError:
     # must have a dictionary ({} for no default map)
     ChildMap = {}
 
-VERSION = 0.19
+VERSION = 0.20
 
 
 # Predefined Smart Plug Commands
@@ -78,7 +78,21 @@ COMMANDS = {
     'energy-reset':
         '{"emeter": {"erase_emeter_stat": {}}}',
 # HS220
-    'bright'   : '{"smartlife.iot.dimmer": {"set_brightness": {"brightness": %d}}}',
+    'bright'   : '{"smartlife.iot.dimmer": {"set_brightness": {"brightness": %(brt)d}}}',
+# LB130 (untested), KL110
+    # Hue: 0-360 (untested)
+    # Saturation: 0-100 (untested)
+    # Brighness: 0-100
+    # Transition: ms delay (for fading)
+    'bulb-hsi' : '{"smartlife.iot.smartbulb.lightingservice": {"transition_light_state": {"on_off": %(on)d,' +
+        '"hue": %(hue)d, "saturation": %(sat)d, "brightness": %(brt)d, "transition_period": %(ttime)d,' +
+        '"mode": "normal", "ignore_default": 1, "color_temp": 0 }}}',
+    'bulbon'   : '{"smartlife.iot.smartbulb.lightingservice": {"transition_light_state": ' +
+        '{"on_off": 1, "transition_period": %(ttime)d}}}',
+    'bulboff'  : '{"smartlife.iot.smartbulb.lightingservice": {"transition_light_state": ' +
+        '{"on_off": 0, "transition_period": %(ttime)d}}}',
+    'bulbbright': '{"smartlife.iot.smartbulb.lightingservice": {"transition_light_state": ' +
+        '{"brightness": %(brt)d, "transition_period": %(ttime)d}}}',
 }
 
 
@@ -216,8 +230,11 @@ def time_dict(when=None):
     }
 
 # command to send
-def cmd_lookup(*, command=None, json=None, username=None, password=None, argument=None):
-    cmd = json if json else COMMANDS[command or 'info']
+def cmd_lookup(*, command=None, json=None, username=None, password=None, argument=None,
+               hue=None, saturation=None, brightness=None, ttime=None):
+    hsi = { 'hue': hue, 'sat': saturation, 'brt': brightness, 'ttime': ttime or 0 }
+    command = command or 'info'
+    cmd = json if json else COMMANDS[command]
     if callable(cmd):
         e = CallableCmd(command)
         e.cmd = cmd
@@ -228,13 +245,27 @@ def cmd_lookup(*, command=None, json=None, username=None, password=None, argumen
         cmd = cmd % {'user': username, 'pass': password}
     elif command == 'settime':
         cmd = cmd % time_dict(when=argument)
-    if '%d' in cmd or '%s' in cmd or '%(' in cmd:
-        if argument is None:
+    elif 'bright' in command:
+        if hsi['brt'] is None:
+            hsi['brt'] = int(argument[0])
+        cmd = cmd % hsi
+    elif '-hsi' in command:
+        if any(hsi[k] is None for k in ('hue', 'sat', 'brt')):
+            hsi['hue'] = int(argument[0])
+            hsi['sat'] = int(argument[1])
+            hsi['brt'] = int(argument[2])
+            if len(argument) > 3:
+                hsi['ttime'] = int(argument[3])
+        cmd = cmd % hsi
+    if 'bulb' in command and '%' in cmd:
+        cmd = cmd % hsi
+    elif '%d' in cmd or '%s' in cmd or '%(' in cmd:
+        if not argument:
             raise MissingArg("Missing argument for '%s'" % ((json or command),))
         try:
-            cmd = cmd % (argument,)
+            cmd = cmd % (argument[0],)
         except TypeError:
-            cmd = cmd % (int(argument),)
+            cmd = cmd % (int(argument[0]),)
     return cmd
 
 
@@ -299,7 +330,9 @@ if __name__ == '__main__':
 
 
     def _cmd_lookup(args):
-        return cmd_lookup(**_args_to_dict(args, 'json', 'command', 'username', 'password', 'argument'))
+        return \
+            cmd_lookup(**_args_to_dict(args,
+                'json', 'command', 'username', 'password', 'argument', 'hue', 'saturation', 'brightness', 'ttime'))
 
     def _args_to_dict(args, *which, xlate={}):
         d = {attr: getattr(args, attr) for attr in which}
@@ -411,7 +444,7 @@ if __name__ == '__main__':
     def validNum(num, minnum, maxnum, numname):
         try:
             num = int(num)
-            if num < minnum or num > maxnum:
+            if (minnum is not None and num < minnum) or (maxnum is not None and num > maxnum):
                 raise ValueError
         except ValueError:
             raise argparse.ArgumentTypeError("Invalid %s number (must be %d-%d)." % (numname, minnum, maxnum))
@@ -455,12 +488,18 @@ if __name__ == '__main__':
         help="Required username for bind")
     parser.add_argument("--password",
         help="Required password for bind")
-    parser.add_argument("-a", "--argument", metavar="<value>",
+    parser.add_argument("-a", "--argument", metavar="<value>", action='append',
         help="Some commands (bright) require an argument, others (settime) accept an optional arg")
+    parser.add_argument("--hue", metavar="0-360", type=lambda x: validNum(x, 0, 360, "hue"))
+    parser.add_argument("--saturation", metavar="0-100", type=lambda x: validNum(x, 0, 100, "saturation"))
+    parser.add_argument("--brightness", "--intensity", metavar="0-100", type=lambda x: validNum(x, 0, 100, "brightness/intensity"))
+    parser.add_argument("--ttime", "--transition-time", metavar="ms", type=lambda x: validNum(x, 0, None, 'transition time'),
+        help="Bulb commands may support a transition time in milliseconds")
     parser.add_argument('more', nargs=argparse.REMAINDER,
         help="targets or commands - whichever is not specified by option")
 
     args = parser.parse_args()
+    #print(args)
 
 
     try:
