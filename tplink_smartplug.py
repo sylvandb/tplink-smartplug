@@ -322,6 +322,19 @@ def add_child_context(cmd, child_id=None, **kwargs):
     return '{"context": {"child_ids": ["%s"]}, %s' % (child_id, cmd[1:]) if child_id else cmd
 
 
+# UNTESTED !!!
+# import and call this function directly
+def set_wifi_credentials(ssid, psk, key_type='3', udp=False):
+    """
+    :param ssid: router ssid
+    :param psk: router passkey
+    :param key_type: 3 is WPA2, maybe 2 is WPA and 1 maybe WEP?  0 is open?
+    :return: command response
+    """
+    wlanssid = '{"netif":{"set_stainfo":{"ssid":"%s","password":"%s","key_type":%d}}}' % (ssid, psk, key_type)
+    return communicate(wlanssid, udp=udp)
+
+
 
 
 if __name__ == '__main__':
