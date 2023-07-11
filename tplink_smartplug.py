@@ -46,6 +46,14 @@ except ImportError:
 
 VERSION = 0.20
 
+# supported:
+#  plugs:
+#    HS100 HS103 HS105 HS107 HS110(em) HS300 KP303 KP115(em) EP10 EP25(em) EP40
+#  switches:
+#    HS200 HS210 HS220
+#  outlets:
+#  bulbs:
+#    LB130? KL110 KL125
 
 # Predefined Smart Plug Commands
 # For a full list of commands, consult tplink-smarthome-commands.txt
@@ -73,7 +81,7 @@ COMMANDS = {
     'unbind'   : '{"cnCloud": {"unbind": ""}}',
 # ???
     'tempinfo' : '{"emeter":{"get_tempinfo": {} }}',
-# HS110, KP115, maybe KP125
+# HS110, KP115, EP25, maybe KP125(Matter)
     'energy'   : '{"emeter": {"get_realtime": {}}}',
     'energy-reset':
         '{"emeter": {"erase_emeter_stat": {}}}',
@@ -95,8 +103,12 @@ COMMANDS = {
         '{"brightness": %(brt)d, "transition_period": %(ttime)d}}}',
 }
 
+CMDALIASES = {
+    'dim': 'bright',
+}
 
-# Encryption and Decryption of TP-Link Smart Home Protocol
+
+# Encryption and Decryption of TP-Link Kasa Smart Home Protocol
 # XOR Autokey Cipher with starting key
 _STARTING_KEY = 171
 
@@ -234,7 +246,11 @@ def cmd_lookup(*, command=None, json=None, username=None, password=None, argumen
                hue=None, saturation=None, brightness=None, ttime=None):
     hsi = { 'hue': hue, 'sat': saturation, 'brt': brightness, 'ttime': ttime or 0 }
     command = command or 'info'
-    cmd = json if json else COMMANDS[command]
+    try:
+        cmd = json if json else COMMANDS[command]
+    except KeyError:
+        command = CMDALIASES[command]
+        cmd = COMMANDS[command]
     if callable(cmd):
         e = CallableCmd(command)
         e.cmd = cmd
@@ -303,7 +319,7 @@ def get_child_id(target, childspec=None, **commargs):
                 child_id = childspec
             else:
                 # child 'Id' is parent 'deviceId' + 2-digit-childnum
-                child_id = '%s%02x' % (get_sysinfo(**commargs)['deviceId'], childnum)
+                child_id = '%s%02x' % (get_sysinfo_field('deviceId', **commargs), childnum)
     else:
         # check the ChildMap for the target
         try:
@@ -505,7 +521,8 @@ if __name__ == '__main__':
         help="Some commands (bright) require an argument, others (settime) accept an optional arg")
     parser.add_argument("--hue", metavar="0-360", type=lambda x: validNum(x, 0, 360, "hue"))
     parser.add_argument("--saturation", metavar="0-100", type=lambda x: validNum(x, 0, 100, "saturation"))
-    parser.add_argument("--brightness", "--intensity", metavar="0-100", type=lambda x: validNum(x, 0, 100, "brightness/intensity"))
+    parser.add_argument("--brightness", "--intensity", "--dim", metavar="0-100",
+                        type=lambda x: validNum(x, 0, 100, "brightness/intensity"))
     parser.add_argument("--ttime", "--transition-time", metavar="ms", type=lambda x: validNum(x, 0, None, 'transition time'),
         help="Bulb commands may support a transition time in milliseconds")
     parser.add_argument('more', nargs=argparse.REMAINDER,

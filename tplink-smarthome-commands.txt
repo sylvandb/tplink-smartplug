@@ -213,7 +213,7 @@ Turn bulb on:  {"smartlife.iot.smartbulb.lightingservice":{"transition_light_sta
 
 Turn bulb off: {"smartlife.iot.smartbulb.lightingservice":{"transition_light_state":{"on_off":0}}}
 
-Turn bulb on over 10 seconds: {"smartlife.iot.smartbulb.lightingservice":{"transition_light_state":{"on_off":0, "transition_period":10000}}}
+Turn bulb off over 10 seconds: {"smartlife.iot.smartbulb.lightingservice":{"transition_light_state":{"on_off":0, "transition_period":10000}}}
 
-Turn bulb on over 10 seconds: {"smartlife.iot.smartbulb.lightingservice":{"transition_light_state":{"on_off":1, "transition_period":10000}}}
+Turn bulb on over 10 seconds:  {"smartlife.iot.smartbulb.lightingservice":{"transition_light_state":{"on_off":1, "transition_period":10000}}}
   (but the ramping up is uneven at dim levels)
