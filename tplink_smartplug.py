@@ -44,7 +44,7 @@ except ImportError:
     # must have a dictionary ({} for no default map)
     ChildMap = {}
 
-VERSION = 0.20
+VERSION = 0.21
 
 # supported:
 #  plugs:
@@ -114,19 +114,20 @@ _STARTING_KEY = 171
 
 def encrypt(bytestring):
     key = _STARTING_KEY
-    result = []
-    for plain in bytestring:
-        key ^= plain
-        result.append(key)
-    return bytes(result)
+    return bytes(key := key ^ plain for plain in bytestring)
+    #def f(plain):
+    #    nonlocal key
+    #    key ^= plain
+    #    return key
+    #return bytes(f(plain) for plain in bytestring)
 
 def decrypt(bytestring):
     key = _STARTING_KEY
-    result = []
-    for cipher in bytestring:
-        result.append(key ^ cipher)
-        key = cipher
-    return bytes(result)
+    def f(cipher):
+        nonlocal key
+        plain, key = key ^ cipher, cipher
+        return plain
+    return bytes(f(cipher) for cipher in bytestring)
 
 
 
