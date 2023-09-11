@@ -44,7 +44,7 @@ except ImportError:
     # must have a dictionary ({} for no default map)
     ChildMap = {}
 
-VERSION = 0.21
+VERSION = 0.22
 
 # supported:
 #  plugs:
@@ -54,6 +54,8 @@ VERSION = 0.21
 #  outlets:
 #  bulbs:
 #    LB130? KL110 KL125
+
+_STATE = ('relay_state', 'state')
 
 # Predefined Smart Plug Commands
 # For a full list of commands, consult tplink-smarthome-commands.txt
@@ -67,7 +69,7 @@ COMMANDS = {
     'reset'    : '{"system": {"reset": {"delay": 1}}}', # reset to factory defaults
     'setalias' : '{"system": {"set_dev_alias": {"alias": "%s"}}}',
     'alias'    : lambda **a: get_sysinfo_field('alias', **a),
-    'state'    : lambda **a: get_sysinfo_field('relay_state', **a),
+    'state'    : lambda **a: get_sysinfo_field(_STATE, **a),
     'wlanscan' : '{"netif": {"get_scaninfo": {"refresh": 0}}}',
     #'wlanssid' : '{"netif":{"set_stainfo":{"ssid":"%s","password":"%s","key_type":3}}}',
     'time'     : '{"time": {"get_time": {}}}',
@@ -292,18 +294,22 @@ def get_sysinfo(**commargs):
 
 
 def get_sysinfo_field(field, child_id=None, **commargs):
+    if isinstance(field, str):
+        field = (field,)
     info = get_sysinfo(**commargs)
     # index into a specified child
     if child_id:
         try:
             info = [c for c in info['children'] if c['id'] == child_id][0]
         except IndexError:
-            return None
-    try:
-        return info[field]
-    except KeyError:
-        if field == 'relay_state':
-            return info.get('state')
+            raise IndexError("No child %r with: %r" % (child_id, field,))
+    # return the specified field
+    for f in field:
+        try:
+            return info[f]
+        except KeyError:
+            pass
+    raise KeyError("Target has no: %r" % (field,))
 
 
 def get_child_id(target, childspec=None, **commargs):
@@ -369,11 +375,15 @@ if __name__ == '__main__':
         d.update({key: getattr(args, attr) for attr, key in xlate.items()})
         return d
 
-
-    def do_command(args, nested=False):
+    def _commargs_from_args(args):
         commargs = _args_to_dict(args, 'port', 'udp', xlate={'target': 'ip'})
         commargs['timeout'] = getattr(args, 'timeout', 5)
         commargs['ip'], commargs['child_id'] = get_child_id(args.target, args.child, **commargs)
+        return commargs
+
+
+    def do_command(args, nested=False):
+        commargs = _commargs_from_args(args)
         try:
             cmd = _cmd_lookup(args)
         except CallableCmd as e:
@@ -456,6 +466,21 @@ if __name__ == '__main__':
         return rv
 
 
+    def isonoff(args, ison=False):
+        # return success(z) if state on and ison
+        # return success(z) if state off and not ison
+        # return fail(nz) otherwise
+        #   ison t f t f
+        #     on t f f t
+        #        0 0 1 1
+        #print(args); print()
+        #reply = get_sysinfo(**_commargs_from_args(args))
+        reply = get_sysinfo_field(_STATE, **_commargs_from_args(args))
+        on = bool(int(reply))
+        #print(on); print(reply)
+        return ison ^ on
+
+
     # Check if hostname is a valid ip address or network address or hostname
     # remember original target
     OrigTarget = None
@@ -526,19 +551,34 @@ if __name__ == '__main__':
                         type=lambda x: validNum(x, 0, 100, "brightness/intensity"))
     parser.add_argument("--ttime", "--transition-time", metavar="ms", type=lambda x: validNum(x, 0, None, 'transition time'),
         help="Bulb commands may support a transition time in milliseconds")
+
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument('--ison', action='store_true',
+        help="Test and exit success if target is on")
+    group.add_argument('--isoff', action='store_true',
+        help="Test and exit success if target is off")
+
     parser.add_argument('more', nargs=argparse.REMAINDER,
         help="targets or commands - whichever is not specified by option")
-
     args = parser.parse_args()
     #print(args)
 
 
     try:
 
+        if args.ison or args.isoff:
+            if not args.target:
+                print("Target is required")
+                sys.exit(2)
+            elif args.json or args.command:
+                print("Cannot combine with any command option")
+                sys.exit(3)
+            sys.exit(isonoff(args, ison=args.ison))
+
         if not args.more:
             if not args.target and not args.discover:
                 print("Target is required")
-                sys.exit(1)
+                sys.exit(2)
 
             sys.exit(do_discover(args) if args.discover else do_command(args))
 
@@ -548,16 +588,16 @@ if __name__ == '__main__':
         if multitarget:
             if args.json:
                 print("more args cannot combine with json command option")
-                sys.exit(1)
+                sys.exit(10)
 
         elif args.json or args.command:
             print("more args cannot combine with both target and any command option")
-            sys.exit(1)
+            sys.exit(11)
 
         sys.exit(do_more(multitarget, args))
 
     except MissingArg as e:
         print(e)
-        sys.exit(1)
+        sys.exit(99)
 
 # vim: sts=4 sw=4 ts=4 et ai si
