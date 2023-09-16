@@ -1,5 +1,5 @@
 -- TP-Link Smart Home Protocol (Port 9999) Wireshark Dissector (UDP)
--- For decrypting local network traffic between TP-Link 
+-- For decrypting local network traffic between TP-Link
 -- Smart Home Devices and the Kasa Smart Home App
 --
 -- UDP: https://github.com/softScheck/tplink-smartplug/issues/92
@@ -9,12 +9,12 @@
 -- (Linux, Mac)   $HOME/.wireshark/plugins
 --
 -- by Lubomir Stroetmann
--- Copyright 2016 softScheck GmbH 
--- 
+-- Copyright 2016 softScheck GmbH
+--
 -- Licensed under the Apache License, Version 2.0 (the "License");
 -- you may not use this file except in compliance with the License.
 -- You may obtain a copy of the License at
--- 
+--
 --    http://www.apache.org/licenses/LICENSE-2.0
 --
 -- Unless required by applicable law or agreed to in writing, software
@@ -28,33 +28,34 @@
 -- Create TP-Link Smart Home protocol and its fields
 p_tplink = Proto ("TPLink-SmartHome-udp","TP-Link Smart Home Protocol (UDP)")
 
+
 -- Dissector function
-function p_tplink.dissector (buf, pkt, root)
+function p_tplink.dissector(buf, pkt, root)
+
   -- Validate packet length
   if buf:len() == 0 then return end
   pkt.cols.protocol = p_tplink.name
- 
+
   -- Decode data
         local ascii = ""
-		local hex = ""
-		
-		-- NOT FOR UDP. Skip first 4 bytes (header)
+        local hex = ""
+
+        -- NOT FOR UDP. Skip first 4 bytes (header)
         start = 0
         endPosition = buf:len() - 1
-		
-		-- Decryption key is -85 (256-85=171)
-		local key = 171
 
-		-- Decrypt Autokey XOR
-		-- Save results as ascii and hex
+        -- Decryption key is -85 (256-85=171)
+        local key = 171
+
+        -- Decrypt Autokey XOR
+        -- Save results as ascii and hex
         for index = start, endPosition do
           local c = buf(index,1):uint()
-		  -- XOR first byte with key
-		  d = bit32.bxor(c,key)
-		  -- Use byte as next key
-		  key = c
-		 
-		  hex = hex .. string.format("%x", d)
+          -- XOR first byte with key
+          d = bit32.bxor(c,key)
+          -- Use byte as next key
+          key = c
+          hex = hex .. string.format("%x", d)
           -- Convert to printable characters
           if d >= 0x20 and d <= 0x7E then
             ascii = ascii .. string.format("%c", d)
@@ -64,26 +65,28 @@ function p_tplink.dissector (buf, pkt, root)
           end
         end
 
-  
   -- Create subtree
   subtree = root:add(p_tplink, buf(0))
-  
+
   -- Add data to subtree
   subtree:add(ascii)
   -- Description of payload
   subtree:append_text(" (decrypted)")
-  
+
   -- Call JSON Dissector with decrypted data
   local b = ByteArray.new(hex)
   local tvb = ByteArray.tvb(b, "JSON TVB")
   Dissector.get("json"):call(tvb, pkt, root)
- 
+
 end
- 
+
+
 -- Initialization routine
 function p_tplink.init()
 end
- 
+
+
+
 -- Register a chained dissector for port 9999
 local udp_dissector_table = DissectorTable.get("udp.port")
 udp_dissector_table:add(9999, p_tplink)
