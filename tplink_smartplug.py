@@ -75,9 +75,28 @@ COMMANDS = {
     'time'     : '{"time": {"get_time": {}}}',
     'settime'  : '{"time": {"set_timezone": '
         '{"year": %(yr)d, "month": %(mo)d, "mday": %(md)d, "hour": %(hr)d, "min": %(mi)d, "sec": %(se)d, "index": 42}}}',
+    'next-action'  :
+        '{"schedule": {"get_next_action": {}}}',
     'schedule' : '{"schedule": {"get_rules": {}}}',
+    # add-schedule
+    # edit-schedule
+    # delete-schedule
+    'delete-all-schedule' :
+        '{"schedule": {"delete_all_rules": {}}}',
+    'runtime-reset':
+        '{"schedule": {"erase_runtime_stat": {}}}',
     'countdown': '{"count_down": {"get_rules": {}}}',
+    # add-countdown
+    # edit-countdown
+    # delete-countdown
+    'delete-all-countdown':
+        '{"count_down": {"delete_all_rules": {}}}',
     'away'     : '{"anti_theft": {"get_rules": {}}}',
+    # add-away
+    # edit-away
+    # delete-away
+    'delete-all-away':
+        '{"anti_theft": {"delete_all_rules": {}}}',
     'cloudinfo': '{"cnCloud": {"get_info": {}}}',
     'bind'     : '{"cnCloud": {"bind": {"username": "%(user)s", "password": "%(pass)s"}}}',
     'unbind'   : '{"cnCloud": {"unbind": ""}}',
