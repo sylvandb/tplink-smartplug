@@ -46,10 +46,11 @@ except ImportError:
 try:
     from tplink_children import Bulbs
 except ImportError:
-    Bulbs = ['parent_ip', 'parent2_ip', ...]
+    # devices by hostname and/or ip address
+    Bulbs = ['device', 'device2', ...]
 
 
-VERSION = 0.23
+VERSION = 0.24
 
 
 # supported:
@@ -616,17 +617,14 @@ if __name__ == '__main__':
 
         if args.ison or args.isoff:
             if not args.target:
-                print("Target is required")
-                sys.exit(2)
+                parser.error("Target is required")
             elif args.json or args.command:
-                print("Cannot combine with any command option")
-                sys.exit(3)
+                parser.error("Cannot combine with any command option")
             sys.exit(isonoff(args, ison=args.ison))
 
         if not args.more:
             if not args.target and not args.discover:
-                print("Target is required")
-                sys.exit(2)
+                parser.error("Target is required")
 
             sys.exit(do_discover(args) if args.discover else do_command(args))
 
@@ -635,17 +633,14 @@ if __name__ == '__main__':
 
         if multitarget:
             if args.json:
-                print("more args cannot combine with json command option")
-                sys.exit(10)
+                parser.error("more args cannot combine with json command option")
 
         elif args.json or args.command:
-            print("more args cannot combine with both target and any command option")
-            sys.exit(11)
+            parser.error("more args cannot combine with both target and any command option")
 
         sys.exit(do_more(multitarget, args))
 
     except MissingArg as e:
-        print(e)
-        sys.exit(99)
+        parser.error(str(e))
 
 # vim: sts=4 sw=4 ts=4 et ai si
