@@ -43,8 +43,14 @@ except ImportError:
     }
     # must have a dictionary ({} for no default map)
     ChildMap = {}
+try:
+    from tplink_children import Bulbs
+except ImportError:
+    Bulbs = ['parent_ip', 'parent2_ip', ...]
 
-VERSION = 0.22
+
+VERSION = 0.23
+
 
 # supported:
 #  plugs:
@@ -53,9 +59,9 @@ VERSION = 0.22
 #    HS200 HS210 HS220
 #  outlets:
 #  bulbs:
-#    LB130? KL110 KL125
+#    LB130? KL110 KL125 KL135
 
-_STATE = ('relay_state', 'state')
+_STATE = ('light_state.on_off', 'relay_state', 'state',)
 
 # Predefined Smart Plug Commands
 # For a full list of commands, consult tplink-smarthome-commands.txt
@@ -108,7 +114,7 @@ COMMANDS = {
         '{"emeter": {"erase_emeter_stat": {}}}',
 # HS220
     'bright'   : '{"smartlife.iot.dimmer": {"set_brightness": {"brightness": %(brt)d}}}',
-# LB130 (untested), KL110
+# LB130 (untested), KL110, KL125, KL135
     # Hue: 0-360 (untested)
     # Saturation: 0-100 (untested)
     # Brighness: 0-100
@@ -124,8 +130,16 @@ COMMANDS = {
         '{"brightness": %(brt)d, "transition_period": %(ttime)d}}}',
 }
 
-CMDALIASES = {
+# alias for convenience/symmetry
+CMD_Aliases = {
     'dim': 'bright',
+}
+
+# alias for bulbs (require different commands)
+CMD_Bulbs = {
+    'off'   : 'bulboff',
+    'on'    : 'bulbon',
+    'bright': 'bulbbright',
 }
 
 
@@ -271,7 +285,7 @@ def cmd_lookup(*, command=None, json=None, username=None, password=None, argumen
     try:
         cmd = json if json else COMMANDS[command]
     except KeyError:
-        command = CMDALIASES[command]
+        command = CMD_Aliases[command]
         cmd = COMMANDS[command]
     if callable(cmd):
         e = CallableCmd(command)
@@ -322,8 +336,18 @@ def get_sysinfo_field(field, child_id=None, **commargs):
             info = [c for c in info['children'] if c['id'] == child_id][0]
         except IndexError:
             raise IndexError("No child %r with: %r" % (child_id, field,))
+    def walk(path):
+        curr = info
+        for p in path:
+            curr = curr[p]
+        return curr
     # return the specified field
     for f in field:
+        if '.' in f:
+            try:
+                return walk(f.split('.'))
+            except KeyError:
+                pass
         try:
             return info[f]
         except KeyError:
@@ -402,6 +426,11 @@ if __name__ == '__main__':
 
 
     def do_command(args, nested=False):
+        if args.command and (OrigTarget in Bulbs or args.target in Bulbs):
+            try:
+                args.command = CMD_Bulbs[args.command]
+            except KeyError:
+                pass
         commargs = _commargs_from_args(args)
         try:
             cmd = _cmd_lookup(args)
