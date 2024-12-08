@@ -46,11 +46,11 @@ except ImportError:
 try:
     from tplink_children import Bulbs
 except ImportError:
-    # devices by hostname and/or ip address
-    Bulbs = ['device', 'device2', ...]
+    # list/tuple of devices by hostname and/or ip address
+    Bulbs = []
 
 
-VERSION = 0.24
+VERSION = 0.25
 
 
 # supported:
@@ -62,6 +62,25 @@ VERSION = 0.24
 #  bulbs:
 #    LB130? KL110 KL125 KL135
 
+
+class DynamicCmd(Exception):
+    pass
+
+class CallableCmd(Exception):
+    pass
+
+class CommFailure(Exception):
+    pass
+
+class MissingArg(Exception):
+    pass
+
+
+# range of color temperature: min, max
+# extremes set by kasa app - experimentation beyond these limits didn't exhibit a difference
+_COLTEMP = (2500, 9000)
+
+# paths to find on/off state
 _STATE = ('light_state.on_off', 'relay_state', 'state',)
 
 # Predefined Smart Plug Commands
@@ -120,12 +139,11 @@ COMMANDS = {
     # Saturation: 0-100 (untested)
     # Brighness: 0-100
     # Transition: ms delay (for fading)
-    'bulb-hsi' : '{"smartlife.iot.smartbulb.lightingservice": {"transition_light_state": {"on_off": %(on)d,' +
-        '"hue": %(hue)d, "saturation": %(sat)d, "brightness": %(brt)d, "transition_period": %(ttime)d,' +
-        '"mode": "normal", "ignore_default": 1, "color_temp": 0 }}}',
-    'bulbon'   : '{"smartlife.iot.smartbulb.lightingservice": {"transition_light_state": ' +
+    'bulb'      : DynamicCmd('bulb'),
+    'bulbstate' : lambda **a: get_sysinfo_field('light_state', **a),
+    'bulbon'    : '{"smartlife.iot.smartbulb.lightingservice": {"transition_light_state": ' +
         '{"on_off": 1, "transition_period": %(ttime)d}}}',
-    'bulboff'  : '{"smartlife.iot.smartbulb.lightingservice": {"transition_light_state": ' +
+    'bulboff'   : '{"smartlife.iot.smartbulb.lightingservice": {"transition_light_state": ' +
         '{"on_off": 0, "transition_period": %(ttime)d}}}',
     'bulbbright': '{"smartlife.iot.smartbulb.lightingservice": {"transition_light_state": ' +
         '{"brightness": %(brt)d, "transition_period": %(ttime)d}}}',
@@ -133,13 +151,19 @@ COMMANDS = {
 
 # alias for convenience/symmetry
 CMD_Aliases = {
-    'dim': 'bright',
+    'dim'        : 'bright',
+    'bulb-bright': 'bulbbright',
+    'bulb-on'    : 'bulbon',
+    'bulb-off'   : 'bulboff',
+    'bulb-state' : 'bulbstate',
+    'light-state': 'bulbstate',
 }
 
 # alias for bulbs (require different commands)
 CMD_Bulbs = {
-    'off'   : 'bulboff',
     'on'    : 'bulbon',
+    'off'   : 'bulboff',
+    'dim'   : 'bulbbright',
     'bright': 'bulbbright',
 }
 
@@ -165,16 +189,6 @@ def decrypt(bytestring):
         return plain
     return bytes(f(cipher) for cipher in bytestring)
 
-
-
-class CallableCmd(Exception):
-    pass
-
-class CommFailure(Exception):
-    pass
-
-class MissingArg(Exception):
-    pass
 
 
 # Send command and receive reply
@@ -279,9 +293,7 @@ def time_dict(when=None):
     }
 
 # command to send
-def cmd_lookup(*, command=None, json=None, username=None, password=None, argument=None,
-               hue=None, saturation=None, brightness=None, ttime=None):
-    hsi = { 'hue': hue, 'sat': saturation, 'brt': brightness, 'ttime': ttime or 0 }
+def cmd_lookup(*, command=None, json=None, **ka):
     command = command or 'info'
     try:
         cmd = json if json else COMMANDS[command]
@@ -292,34 +304,84 @@ def cmd_lookup(*, command=None, json=None, username=None, password=None, argumen
         e = CallableCmd(command)
         e.cmd = cmd
         raise e
-    elif command == 'bind':
+    elif isinstance(cmd, DynamicCmd):
+        cmd = dynamic_cmd(command, cmd, **ka)
+    else:
+        cmd = template_cmd(command, cmd, **ka)
+    if '%d' in cmd or '%s' in cmd or '%(' in cmd:
+        raise MissingArg("Missing argument for '%s'" % ((json or command),))
+    return cmd
+
+def template_cmd(command, cmd, *, username=None, password=None, argument=None,
+                      brightness=None, ttime=None, **ka):
+    # dict arg substitution for specific cmds
+    if command == 'bind':
         if not username or not password:
             raise MissingArg("%s requires username and password" % (command,))
         cmd = cmd % {'user': username, 'pass': password}
     elif command == 'settime':
         cmd = cmd % time_dict(when=argument)
     elif 'bright' in command:
-        if hsi['brt'] is None:
-            hsi['brt'] = int(argument[0])
-        cmd = cmd % hsi
-    elif '-hsi' in command:
-        if any(hsi[k] is None for k in ('hue', 'sat', 'brt')):
-            hsi['hue'] = int(argument[0])
-            hsi['sat'] = int(argument[1])
-            hsi['brt'] = int(argument[2])
-            if len(argument) > 3:
-                hsi['ttime'] = int(argument[3])
-        cmd = cmd % hsi
-    if 'bulb' in command and '%' in cmd:
-        cmd = cmd % hsi
-    elif '%d' in cmd or '%s' in cmd or '%(' in cmd:
-        if not argument:
-            raise MissingArg("Missing argument for '%s'" % ((json or command),))
+        hsi = { 'brt': brightness, 'ttime': ttime or 0 }
+        try:
+            # required
+            if brightness is None:
+                hsi['brt'] = int(argument[0])
+            # optional - ignored by dimmer switches
+            if ttime is None and argument and argument[1:]:
+                hsi['ttime'] = int(argument[1])
+            cmd = cmd % hsi
+        except (IndexError, TypeError):
+            pass
+    elif 'bulb' in command and '%' in cmd:
+        cmd = cmd % {'ttime': ttime or 0}
+    # single/generic arg substitution if needed
+    if '%d' in cmd or '%s' in cmd or '%(' in cmd:
         try:
             cmd = cmd % (argument[0],)
         except TypeError:
-            cmd = cmd % (int(argument[0]),)
+            try:
+                cmd = cmd % (int(argument[0]),)
+            except TypeError:
+                pass
+        except IndexError:
+            pass
     return cmd
+
+def dynamic_cmd(command, cmd, **commargs):
+    #print(f'dynamic: {command}, {commargs}')
+    if command == 'bulb':
+        return dynamic_cmd_bulb(**commargs)
+    raise DynamicCmd(f"Bad command: {command}, {cmd!r}")
+
+def dynamic_cmd_bulb(*, argument=None, on=None, off=None,
+               circadian=None, hue=None, saturation=None, brightness=None, ctemp=None, ttime=None, **ka):
+    # "light_state": {"on_off": 1, "mode": "normal", "hue": 0, "saturation": 0, "color_temp": 2500, "brightness": 5}
+    # "light_state": {"on_off": 1, "mode": "normal", "hue": 0, "saturation": 0, "color_temp": 9000, "brightness": 5}
+    # "light_state": {"on_off": 1, "mode": "circadian", "hue": 0, "saturation": 0, "color_temp": 2700, "brightness": 5}
+    # cmd = '{"smartlife.iot.smartbulb.lightingservice": {"transition_light_state": {"on_off": %(on)d,' +
+    #     '"hue": %(hue)d, "saturation": %(sat)d, "brightness": %(brt)d, "transition_period": %(ttime)d,' +
+    #     '"mode": "%(mode)s", "ignore_default": 1, "color_temp": %(ctemp)d }}}',
+    state = {
+        'transition_period': ttime or 0,
+        'ignore_default': 1,
+    }
+    if circadian:
+        state['mode'] = 'circadian'
+    else:
+        state['mode'] = 'normal'
+        if ctemp:
+            state['color_temp'] = ctemp
+        elif hue or saturation:
+            state['hue'] = hue or 0
+            state['saturation'] = saturation or 0
+    if brightness is not None:
+        state['brightness'] = brightness
+    if on:
+        state['on_off'] = 1
+    elif off:
+        state['on_off'] = 0
+    return json.dumps({"smartlife.iot.smartbulb.lightingservice": {"transition_light_state": state}})
 
 
 def get_sysinfo(**commargs):
@@ -412,7 +474,8 @@ if __name__ == '__main__':
     def _cmd_lookup(args):
         return \
             cmd_lookup(**_args_to_dict(args,
-                'json', 'command', 'username', 'password', 'argument', 'hue', 'saturation', 'brightness', 'ttime'))
+                'json', 'command', 'username', 'password', 'argument', 'on', 'off',
+                'circadian', 'ctemp', 'hue', 'saturation', 'brightness', 'ttime'))
 
     def _args_to_dict(args, *which, xlate={}):
         d = {attr: getattr(args, attr) for attr in which}
@@ -593,18 +656,28 @@ if __name__ == '__main__':
     parser.add_argument("--password",
         help="Required password for bind")
     parser.add_argument("-a", "--argument", metavar="<value>", action='append',
-        help="Some commands (bright) require an argument, others (settime) accept an optional arg")
-    parser.add_argument("--hue", metavar="0-360", type=lambda x: validNum(x, 0, 360, "hue"))
-    parser.add_argument("--saturation", metavar="0-100", type=lambda x: validNum(x, 0, 100, "saturation"))
-    parser.add_argument("--brightness", "--intensity", "--dim", metavar="0-100",
-                        type=lambda x: validNum(x, 0, 100, "brightness/intensity"))
-    parser.add_argument("--ttime", "--transition-time", metavar="ms", type=lambda x: validNum(x, 0, None, 'transition time'),
-        help="Bulb commands may support a transition time in milliseconds")
+        help="Provide argument for commands which require an argument (bright) or accept an optional arg (settime)")
 
-    group = parser.add_mutually_exclusive_group()
-    group.add_argument('--ison', action='store_true',
+    group = parser.add_argument_group(title="Bulb options")
+    xgroup = group.add_mutually_exclusive_group()
+    xgroup.add_argument("--on", action='store_true', help="turn on")
+    xgroup.add_argument("--off", action='store_true', help="turn off")
+    group.add_argument("--ttime", "--transition-time", metavar="ms", type=lambda x: validNum(x, 0, None, 'transition time'),
+        help="May support a transition time in milliseconds")
+    group.add_argument("--ctemp", "--color-temperature", metavar=f"{_COLTEMP[0]}-{_COLTEMP[1]} kelvin",
+        type=lambda x: validNum(x, _COLTEMP[0], _COLTEMP[1], 'color temperature'),
+        help="May support a color temperature in degrees kelvin instead of hue + saturation")
+    group.add_argument("--circadian", action='store_true',
+        help="May support automatically tracking color temperature and intensity based on time of day (circadian rhythm)")
+    group.add_argument("--hue", metavar="0-360", type=lambda x: validNum(x, 0, 360, "hue"))
+    group.add_argument("--saturation", metavar="0-100", type=lambda x: validNum(x, 0, 100, "saturation"))
+    group.add_argument("--intensity", "--brightness", "--dim", metavar="0-100", dest="brightness",
+                        type=lambda x: validNum(x, 0, 100, "brightness/intensity"))
+
+    xgroup = parser.add_mutually_exclusive_group()
+    xgroup.add_argument('--ison', action='store_true',
         help="Test and exit success if target is on")
-    group.add_argument('--isoff', action='store_true',
+    xgroup.add_argument('--isoff', action='store_true',
         help="Test and exit success if target is off")
 
     parser.add_argument('more', nargs=argparse.REMAINDER,
